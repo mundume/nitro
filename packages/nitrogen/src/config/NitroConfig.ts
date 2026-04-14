@@ -102,6 +102,13 @@ export class NitroConfig {
   }
 
   /**
+   * Returns whether a given HybridObject should use a container Android ViewManager.
+   */
+  isAndroidContainerView(name: string): boolean {
+    return this.config.android.containerViews?.includes(name) ?? false
+  }
+
+  /**
    * Get the autolinking configuration of all HybridObjects.
    * Those will be generated and default-constructed.
    */

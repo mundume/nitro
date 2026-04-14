@@ -69,6 +69,11 @@ export const NitroUserConfigSchema = z.object({
       .string()
       .regex(safeNamePattern)
       .refine(isNotReservedKeyword, isReservedKeywordError),
+
+    /**
+     * HybridObjects that should generate container-style Android ViewManagers.
+     */
+    containerViews: z.array(z.string()).optional(),
   }),
   /**
    * Configures the code that gets generated for autolinking (registering)

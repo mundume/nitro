@@ -81,9 +81,262 @@ export function createViewComponentShadowNodeFiles(
       p.getRequiredImports('c++').map((i) => includeHeader(i, true))
     )
     .filter(isNotDuplicate)
-
-  // .hpp code
   const shadowIndent = createIndentation(shadowNodeClassName.length)
+  const usesNativeLayoutBridge = spec.name === 'NitroUI' || spec.name === 'NitroRNHost'
+  const preservesMeasuredSizeOnAdopt = spec.name === 'NitroRNHost'
+  const androidDynamicInclude = usesNativeLayoutBridge
+    ? `#ifdef ANDROID
+#include <folly/dynamic.h>
+#endif`
+    : ''
+  const androidDynamicIncludeBlock =
+    androidDynamicInclude.length > 0 ? `\n${androidDynamicInclude}` : ''
+  const stateClassDefinition = usesNativeLayoutBridge
+    ? `  class ${stateClassName} final {
+  public:
+    ${stateClassName}() = default;
+    explicit ${stateClassName}(
+      const std::shared_ptr<${propsClassName}>& props,
+      std::optional<double> width = std::nullopt,
+      std::optional<double> height = std::nullopt,
+      std::optional<double> styleWidth = std::nullopt,
+      std::optional<double> styleHeight = std::nullopt):
+      _props(props),
+      _width(std::move(width)),
+      _height(std::move(height)),
+      _styleWidth(std::move(styleWidth)),
+      _styleHeight(std::move(styleHeight)) {}
+
+  public:
+    [[nodiscard]]
+    const std::shared_ptr<${propsClassName}>& getProps() const {
+      return _props;
+    }
+
+    [[nodiscard]]
+    const std::optional<double>& getWidth() const {
+      return _width;
+    }
+
+    [[nodiscard]]
+    const std::optional<double>& getHeight() const {
+      return _height;
+    }
+
+    [[nodiscard]]
+    const std::optional<double>& getStyleWidth() const {
+      return _styleWidth;
+    }
+
+    [[nodiscard]]
+    const std::optional<double>& getStyleHeight() const {
+      return _styleHeight;
+    }
+
+  public:
+#ifdef ANDROID
+  ${stateClassName}(const ${stateClassName}& previousState, folly::dynamic data):
+    _props(previousState._props),
+    _width(previousState._width),
+    _height(previousState._height),
+    _styleWidth(previousState._styleWidth),
+    _styleHeight(previousState._styleHeight) {
+    if (!data.isObject()) {
+      return;
+    }
+
+    if (const auto* width = data.get_ptr("width"); width != nullptr) {
+      if (width->isNumber()) {
+        _width = width->asDouble();
+      } else if (width->isNull()) {
+        _width = std::nullopt;
+      }
+    }
+
+    if (const auto* height = data.get_ptr("height"); height != nullptr) {
+      if (height->isNumber()) {
+        _height = height->asDouble();
+      } else if (height->isNull()) {
+        _height = std::nullopt;
+      }
+    }
+
+    if (const auto* styleWidth = data.get_ptr("styleWidth"); styleWidth != nullptr) {
+      if (styleWidth->isNumber()) {
+        _styleWidth = styleWidth->asDouble();
+      } else if (styleWidth->isNull()) {
+        _styleWidth = std::nullopt;
+      }
+    }
+
+    if (const auto* styleHeight = data.get_ptr("styleHeight"); styleHeight != nullptr) {
+      if (styleHeight->isNumber()) {
+        _styleHeight = styleHeight->asDouble();
+      } else if (styleHeight->isNull()) {
+        _styleHeight = std::nullopt;
+      }
+    }
+  }
+  folly::dynamic getDynamic() const {
+    folly::dynamic result = folly::dynamic::object();
+    if (_width.has_value()) {
+      result["width"] = _width.value();
+    }
+    if (_height.has_value()) {
+      result["height"] = _height.value();
+    }
+    if (_styleWidth.has_value()) {
+      result["styleWidth"] = _styleWidth.value();
+    }
+    if (_styleHeight.has_value()) {
+      result["styleHeight"] = _styleHeight.value();
+    }
+    return result;
+  }
+  react::MapBuffer getMapBuffer() const {
+    throw std::runtime_error("${stateClassName} does not support MapBuffer!");
+  };
+#endif
+
+  private:
+    std::shared_ptr<${propsClassName}> _props;
+    std::optional<double> _width;
+    std::optional<double> _height;
+    std::optional<double> _styleWidth;
+    std::optional<double> _styleHeight;
+  };`
+    : `  class ${stateClassName} final {
+  public:
+    ${stateClassName}() = default;
+    explicit ${stateClassName}(const std::shared_ptr<${propsClassName}>& props):
+      _props(props) {}
+
+  public:
+    [[nodiscard]]
+    const std::shared_ptr<${propsClassName}>& getProps() const {
+      return _props;
+    }
+
+  public:
+#ifdef ANDROID
+  ${stateClassName}(const ${stateClassName}& /* previousState */, folly::dynamic /* data */) {}
+  folly::dynamic getDynamic() const {
+    throw std::runtime_error("${stateClassName} does not support folly!");
+  }
+  react::MapBuffer getMapBuffer() const {
+    throw std::runtime_error("${stateClassName} does not support MapBuffer!");
+  };
+#endif
+
+  private:
+    std::shared_ptr<${propsClassName}> _props;
+  };`
+  const shadowNodeDefinition = usesNativeLayoutBridge
+    ? `  using ${shadowNodeClassName}Base = react::ConcreteViewShadowNode<${nameVariable} /* "${HybridT}" */,
+        ${shadowIndent}                                     ${propsClassName} /* custom props */,
+        ${shadowIndent}                                     react::ViewEventEmitter /* default */,
+        ${shadowIndent}                                     ${stateClassName} /* custom state */>;
+
+  class ${shadowNodeClassName} final : public ${shadowNodeClassName}Base {
+  public:
+    using ${shadowNodeClassName}Base::${shadowNodeClassName}Base;
+
+    static react::ShadowNodeTraits BaseTraits() {
+      auto traits = ${shadowNodeClassName}Base::BaseTraits();
+      return traits;
+    }
+  };`
+    : `  using ${shadowNodeClassName} = react::ConcreteViewShadowNode<${nameVariable} /* "${HybridT}" */,
+        ${shadowIndent}                                 ${propsClassName} /* custom props */,
+        ${shadowIndent}                                 react::ViewEventEmitter /* default */,
+        ${shadowIndent}                                 ${stateClassName} /* custom state */>;`
+  const cppExtraIncludes = usesNativeLayoutBridge
+    ? `#include <cmath>
+#include <limits>
+#include <react/renderer/components/view/YogaLayoutableShadowNode.h>
+#include <yoga/style/StyleSizeLength.h>`
+    : ''
+  const cppExtraIncludesBlock =
+    cppExtraIncludes.length > 0 ? `\n${cppExtraIncludes}` : ''
+  const adoptBody = usesNativeLayoutBridge
+    ? `    std::optional<double> width = std::nullopt;
+    std::optional<double> height = std::nullopt;
+    std::optional<double> styleWidth = std::nullopt;
+    std::optional<double> styleHeight = std::nullopt;
+    if (shadowNode.getState() != nullptr) {
+      const auto& previousStateData = static_cast<const ${shadowNodeClassName}::ConcreteState&>(*shadowNode.getState()).getData();
+      ${preservesMeasuredSizeOnAdopt ? `width = previousStateData.getWidth();
+      height = previousStateData.getHeight();
+      ` : ''}styleWidth = previousStateData.getStyleWidth();
+      styleHeight = previousStateData.getStyleHeight();
+    }
+
+    ${stateClassName} state{props, width, height, styleWidth, styleHeight};
+    concreteShadowNode.setStateData(std::move(state));
+
+    const auto& stateData = concreteShadowNode.getStateData();
+    auto* layoutableShadowNode = dynamic_cast<react::YogaLayoutableShadowNode*>(&shadowNode);
+    const auto& viewProps =
+      *std::static_pointer_cast<const react::ViewProps>(concreteShadowNode.getProps());
+
+    if (layoutableShadowNode != nullptr) {
+      auto widthForSize = stateData.getWidth().has_value()
+        ? static_cast<react::Float>(stateData.getWidth().value())
+        : std::numeric_limits<react::Float>::quiet_NaN();
+      auto heightForSize = stateData.getHeight().has_value()
+        ? static_cast<react::Float>(stateData.getHeight().value())
+        : std::numeric_limits<react::Float>::quiet_NaN();
+
+      auto widthProp = viewProps.yogaStyle.dimension(facebook::yoga::Dimension::Width);
+      auto heightProp = viewProps.yogaStyle.dimension(facebook::yoga::Dimension::Height);
+
+      if (widthProp.isDefined() && widthProp.isPoints() && widthProp.value().isDefined()) {
+        widthForSize = widthProp.value().unwrap();
+      }
+      if (heightProp.isDefined() && heightProp.isPoints() && heightProp.value().isDefined()) {
+        heightForSize = heightProp.value().unwrap();
+      }
+
+      if (!std::isnan(widthForSize) || !std::isnan(heightForSize)) {
+        layoutableShadowNode->setSize({widthForSize, heightForSize});
+      }
+
+      auto& style = const_cast<facebook::yoga::Style&>(viewProps.yogaStyle);
+      auto targetWidth = widthProp;
+      auto targetHeight = heightProp;
+
+      if (stateData.getStyleWidth().has_value()) {
+        targetWidth = facebook::yoga::StyleSizeLength::points(
+          static_cast<float>(stateData.getStyleWidth().value())
+        );
+      }
+
+      if (stateData.getStyleHeight().has_value()) {
+        targetHeight = facebook::yoga::StyleSizeLength::points(
+          static_cast<float>(stateData.getStyleHeight().value())
+        );
+      }
+
+      bool changedStyle = false;
+      if (!(style.dimension(facebook::yoga::Dimension::Width) == targetWidth)) {
+        style.setDimension(facebook::yoga::Dimension::Width, targetWidth);
+        changedStyle = true;
+      }
+      if (!(style.dimension(facebook::yoga::Dimension::Height) == targetHeight)) {
+        style.setDimension(facebook::yoga::Dimension::Height, targetHeight);
+        changedStyle = true;
+      }
+
+      if (changedStyle) {
+        layoutableShadowNode->updateYogaProps();
+        layoutableShadowNode->dirtyLayout();
+      }
+    }
+
+    ConcreteComponentDescriptor::adopt(shadowNode);`
+    : `    ${stateClassName} state{props};
+    concreteShadowNode.setStateData(std::move(state));`
+  // .hpp code
   const componentHeaderCode = `
 ${createFileMetadataString(`${component}.hpp`)}
 
@@ -96,7 +349,7 @@ ${createFileMetadataString(`${component}.hpp`)}
 #include <react/renderer/core/ConcreteComponentDescriptor.h>
 #include <react/renderer/core/PropsParserContext.h>
 #include <react/renderer/components/view/ConcreteViewShadowNode.h>
-#include <react/renderer/components/view/ViewProps.h>
+#include <react/renderer/components/view/ViewProps.h>${androidDynamicIncludeBlock}
 
 ${includes.join('\n')}
 
@@ -129,40 +382,12 @@ namespace ${namespace} {
   /**
    * State for the "${spec.name}" View.
    */
-  class ${stateClassName} final {
-  public:
-    ${stateClassName}() = default;
-    explicit ${stateClassName}(const std::shared_ptr<${propsClassName}>& props):
-      _props(props) {}
-
-  public:
-    [[nodiscard]]
-    const std::shared_ptr<${propsClassName}>& getProps() const {
-      return _props;
-    }
-
-  public:
-#ifdef ANDROID
-  ${stateClassName}(const ${stateClassName}& /* previousState */, folly::dynamic /* data */) {}
-  folly::dynamic getDynamic() const {
-    throw std::runtime_error("${stateClassName} does not support folly!");
-  }
-  react::MapBuffer getMapBuffer() const {
-    throw std::runtime_error("${stateClassName} does not support MapBuffer!");
-  };
-#endif
-
-  private:
-    std::shared_ptr<${propsClassName}> _props;
-  };
+${stateClassDefinition}
 
   /**
    * The Shadow Node for the "${spec.name}" View.
    */
-  using ${shadowNodeClassName} = react::ConcreteViewShadowNode<${nameVariable} /* "${HybridT}" */,
-        ${shadowIndent}                                 ${propsClassName} /* custom props */,
-        ${shadowIndent}                                 react::ViewEventEmitter /* default */,
-        ${shadowIndent}                                 ${stateClassName} /* custom state */>;
+${shadowNodeDefinition}
 
   /**
    * The Component Descriptor for the "${spec.name}" View.
@@ -237,7 +462,7 @@ ${createFileMetadataString(`${component}.cpp`)}
 #include <react/renderer/core/RawValue.h>
 #include <react/renderer/core/ShadowNode.h>
 #include <react/renderer/core/ComponentDescriptor.h>
-#include <react/renderer/components/view/ViewProps.h>
+#include <react/renderer/components/view/ViewProps.h>${cppExtraIncludesBlock}
 
 namespace ${namespace} {
 
@@ -275,8 +500,7 @@ namespace ${namespace} {
     auto& concreteShadowNode = static_cast<${shadowNodeClassName}&>(shadowNode);
     const std::shared_ptr<const ${propsClassName}>& constProps = concreteShadowNode.getConcreteSharedProps();
     const std::shared_ptr<${propsClassName}>& props = std::const_pointer_cast<${propsClassName}>(constProps);
-    ${stateClassName} state{props};
-    concreteShadowNode.setStateData(std::move(state));
+${adoptBody}
   }
 #endif
 

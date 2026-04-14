@@ -1,42 +1,26 @@
-import type { SourceFile } from '../../syntax/SourceFile.js'
-import type { HybridObjectSpec } from '../../syntax/HybridObjectSpec.js'
+import type { SourceFile } from "../../syntax/SourceFile.js";
+import type { HybridObjectSpec } from "../../syntax/HybridObjectSpec.js";
 import {
-  createViewComponentShadowNodeFiles,
-  getViewComponentNames,
-} from '../CppHybridViewComponent.js'
+	createViewComponentShadowNodeFiles,
+	getViewComponentNames,
+} from "../CppHybridViewComponent.js";
 import {
-  createFileMetadataString,
-  escapeCppName,
-} from '../../syntax/helpers.js'
-import { getHybridObjectName } from '../../syntax/getHybridObjectName.js'
-import { addJNINativeRegistration } from '../../syntax/kotlin/JNINativeRegistrations.js'
-import { indent } from '../../utils.js'
+	createFileMetadataString,
+	escapeCppName,
+} from "../../syntax/helpers.js";
+import { getHybridObjectName } from "../../syntax/getHybridObjectName.js";
+import { addJNINativeRegistration } from "../../syntax/kotlin/JNINativeRegistrations.js";
+import { indent } from "../../utils.js";
 
-export function createKotlinHybridViewManager(
-  spec: HybridObjectSpec
-): SourceFile[] {
-  const cppFiles = createViewComponentShadowNodeFiles(spec)
-  const javaSubNamespace = spec.config.getAndroidPackage('java/kotlin', 'views')
-  const javaNamespace = spec.config.getAndroidPackage('java/kotlin')
-  const cxxNamespace = spec.config.getCxxNamespace('c++', 'views')
-  const { JHybridTSpec, HybridTSpec } = getHybridObjectName(spec.name)
-  const {
-    manager,
-    stateClassName,
-    component,
-    propsClassName,
-    descriptorClassName,
-  } = getViewComponentNames(spec)
-  const stateUpdaterName = `${stateClassName}Updater`
-  const autolinking = spec.config.getAutolinkedHybridObjects()
-  const viewImplementation = autolinking[spec.name]?.kotlin
-  if (viewImplementation == null) {
-    throw new Error(
-      `Cannot create Kotlin HybridView ViewManager for ${spec.name} - it is not autolinked in nitro.json!`
-    )
-  }
-
-  const viewManagerCode = `
+function createSimpleViewManager(
+	spec: HybridObjectSpec,
+	javaNamespace: string,
+	javaSubNamespace: string,
+	manager: string,
+	stateUpdaterName: string,
+	viewImplementation: string,
+): string {
+	return `
 ${createFileMetadataString(`${manager}.kt`)}
 
 package ${javaSubNamespace}
@@ -102,9 +86,122 @@ public class ${manager}: SimpleViewManager<View>() {
     }
   }
 }
-  `.trim()
+  `.trim();
+}
 
-  const updaterKotlinCode = `
+function createContainerViewManager(
+	spec: HybridObjectSpec,
+	javaNamespace: string,
+	javaSubNamespace: string,
+	manager: string,
+	stateUpdaterName: string,
+	viewImplementation: string,
+): string {
+	return `
+${createFileMetadataString(`${manager}.kt`)}
+
+package ${javaSubNamespace}
+
+import android.view.View
+import com.facebook.react.uimanager.StateWrapper
+import com.facebook.react.uimanager.ThemedReactContext
+import com.facebook.react.views.view.ReactViewGroup
+import ${javaNamespace}.*
+
+/**
+ * Represents the React Native \`ViewManager\` for the "${spec.name}" Nitro HybridView.
+ *
+ * This variant is generated as a container manager, so the HybridView must expose
+ * \`childrenContainer\` and \`onChildrenChanged()\`.
+ */
+public class ${manager}: NitroContainerManager<${viewImplementation}>() {
+  override val hybridViewClass: Class<${viewImplementation}> = ${viewImplementation}::class.java
+  override val viewName: String = "${spec.name}"
+
+  init {
+    setupRecyclingIfSupported()
+  }
+
+  override fun createHybridView(reactContext: ThemedReactContext): ${viewImplementation} {
+    return ${viewImplementation}(reactContext)
+  }
+
+  override fun getViewFromHybrid(hybridView: ${viewImplementation}): View {
+    return hybridView.view
+  }
+
+  override fun getChildrenContainer(hybridView: ${viewImplementation}): ReactViewGroup {
+    return hybridView.childrenContainer
+  }
+
+  override fun onChildrenChangedCallback(hybridView: ${viewImplementation}) {
+    hybridView.onChildrenChanged()
+  }
+
+  override fun updateProps(hybridView: ${viewImplementation}, stateWrapper: StateWrapper) {
+    ${stateUpdaterName}.updateViewProps(hybridView, stateWrapper)
+  }
+
+  override fun beforeUpdate(hybridView: ${viewImplementation}) {
+    hybridView.beforeUpdate()
+  }
+
+  override fun afterUpdate(hybridView: ${viewImplementation}) {
+    hybridView.afterUpdate()
+  }
+}
+  `.trim();
+}
+
+export function createKotlinHybridViewManager(
+	spec: HybridObjectSpec,
+): SourceFile[] {
+	const cppFiles = createViewComponentShadowNodeFiles(spec);
+	const javaSubNamespace = spec.config.getAndroidPackage(
+		"java/kotlin",
+		"views",
+	);
+	const javaNamespace = spec.config.getAndroidPackage("java/kotlin");
+	const cxxNamespace = spec.config.getCxxNamespace("c++", "views");
+	const { JHybridTSpec, HybridTSpec } = getHybridObjectName(spec.name);
+	const {
+		manager,
+		stateClassName,
+		component,
+		propsClassName,
+		descriptorClassName,
+	} = getViewComponentNames(spec);
+	const stateUpdaterName = `${stateClassName}Updater`;
+	const autolinking = spec.config.getAutolinkedHybridObjects();
+	const autolinkingConfig = autolinking[spec.name];
+	const viewImplementation = autolinkingConfig?.kotlin;
+	const androidViewManager = spec.config.isAndroidContainerView(spec.name) ? "container" : "simple";
+	if (viewImplementation == null) {
+		throw new Error(
+			`Cannot create Kotlin HybridView ViewManager for ${spec.name} - it is not autolinked in nitro.json!`,
+		);
+	}
+
+	const viewManagerCode =
+		androidViewManager === "container"
+			? createContainerViewManager(
+					spec,
+					javaNamespace,
+					javaSubNamespace,
+					manager,
+					stateUpdaterName,
+					viewImplementation,
+				)
+			: createSimpleViewManager(
+					spec,
+					javaNamespace,
+					javaSubNamespace,
+					manager,
+					stateUpdaterName,
+					viewImplementation,
+				);
+
+	const updaterKotlinCode = `
 ${createFileMetadataString(`${stateUpdaterName}.kt`)}
 
 package ${javaSubNamespace}
@@ -123,14 +220,14 @@ internal class ${stateUpdaterName} {
     external fun updateViewProps(view: ${HybridTSpec}, state: StateWrapper)
   }
 }
-  `.trim()
+  `.trim();
 
-  const updaterJniDescriptor = spec.config.getAndroidPackage(
-    'c++/jni',
-    'views',
-    stateUpdaterName
-  )
-  const updaterJniHeaderCode = `
+	const updaterJniDescriptor = spec.config.getAndroidPackage(
+		"c++/jni",
+		"views",
+		stateUpdaterName,
+	);
+	const updaterJniHeaderCode = `
 ${createFileMetadataString(`J${stateUpdaterName}.hpp`)}
 
 #pragma once
@@ -175,19 +272,19 @@ public:
 };
 
 } // namespace ${cxxNamespace}
-  `.trim()
+  `.trim();
 
-  const propsUpdaterCalls = spec.properties.map((p) => {
-    const name = escapeCppName(p.name)
-    const setter = p.getSetterName('other')
-    return `
+	const propsUpdaterCalls = spec.properties.map((p) => {
+		const name = escapeCppName(p.name);
+		const setter = p.getSetterName("other");
+		return `
 if (props->${name}.isDirty) {
   view->${setter}(props->${name}.value);
   props->${name}.isDirty = false;
 }
-    `.trim()
-  })
-  const updaterJniCppCode = `
+    `.trim();
+	});
+	const updaterJniCppCode = `
 ${createFileMetadataString(`J${stateUpdaterName}.cpp`)}
 
 #include "J${stateUpdaterName}.hpp"
@@ -222,7 +319,7 @@ void J${stateUpdaterName}::updateViewProps(jni::alias_ref<jni::JClass> /* class 
   }
 
   // Update all props if they are dirty
-  ${indent(propsUpdaterCalls.join('\n'), '  ')}
+  ${indent(propsUpdaterCalls.join("\n"), "  ")}
 
   // Update hybridRef if it changed
   if (props->hybridRef.isDirty) {
@@ -237,47 +334,47 @@ void J${stateUpdaterName}::updateViewProps(jni::alias_ref<jni::JClass> /* class 
 }
 
 } // namespace ${cxxNamespace}
-`.trim()
+`.trim();
 
-  addJNINativeRegistration({
-    namespace: cxxNamespace,
-    className: `J${stateUpdaterName}`,
-    import: {
-      name: `views/J${stateUpdaterName}.hpp`,
-      space: 'user',
-      language: 'c++',
-    },
-  })
+	addJNINativeRegistration({
+		namespace: cxxNamespace,
+		className: `J${stateUpdaterName}`,
+		import: {
+			name: `views/J${stateUpdaterName}.hpp`,
+			space: "user",
+			language: "c++",
+		},
+	});
 
-  return [
-    ...cppFiles,
-    {
-      content: viewManagerCode,
-      language: 'kotlin',
-      name: `${manager}.kt`,
-      platform: 'android',
-      subdirectory: [...javaSubNamespace.split('.')],
-    },
-    {
-      content: updaterKotlinCode,
-      language: 'kotlin',
-      name: `${stateUpdaterName}.kt`,
-      platform: 'android',
-      subdirectory: [...javaSubNamespace.split('.')],
-    },
-    {
-      content: updaterJniHeaderCode,
-      language: 'c++',
-      name: `J${stateUpdaterName}.hpp`,
-      platform: 'android',
-      subdirectory: ['views'],
-    },
-    {
-      content: updaterJniCppCode,
-      language: 'c++',
-      name: `J${stateUpdaterName}.cpp`,
-      platform: 'android',
-      subdirectory: ['views'],
-    },
-  ]
+	return [
+		...cppFiles,
+		{
+			content: viewManagerCode,
+			language: "kotlin",
+			name: `${manager}.kt`,
+			platform: "android",
+			subdirectory: [...javaSubNamespace.split(".")],
+		},
+		{
+			content: updaterKotlinCode,
+			language: "kotlin",
+			name: `${stateUpdaterName}.kt`,
+			platform: "android",
+			subdirectory: [...javaSubNamespace.split(".")],
+		},
+		{
+			content: updaterJniHeaderCode,
+			language: "c++",
+			name: `J${stateUpdaterName}.hpp`,
+			platform: "android",
+			subdirectory: ["views"],
+		},
+		{
+			content: updaterJniCppCode,
+			language: "c++",
+			name: `J${stateUpdaterName}.cpp`,
+			platform: "android",
+			subdirectory: ["views"],
+		},
+	];
 }
